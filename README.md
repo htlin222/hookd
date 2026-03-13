@@ -14,6 +14,33 @@ hookd setup
 
 The wizard walks you through: repo detection, dependency checks, GitHub PAT, event selection, secret generation, and deployment (config files, webhook registration, Tailscale Funnel, system service).
 
+## Reusing Across Repos
+
+After the first interactive setup, your GitHub token is saved globally. Use quick setup to configure new repos in seconds:
+
+```bash
+cd ~/another-repo
+hookd setup --quick                                    # push events on default branch
+hookd setup --quick --events push,issues               # multiple event types
+hookd setup --quick --branches main,develop            # multiple branches
+hookd setup --quick --events push,pull_request --branches main
+```
+
+### Global Config (`~/.config/hookd/`)
+
+| File | Purpose |
+|------|---------|
+| `global.env` | Shared GitHub token (saved automatically during interactive setup) |
+| `templates/*.sh` | Reusable handler scripts, copied into each new repo on setup |
+
+To add reusable handler templates:
+
+```bash
+mkdir -p ~/.config/hookd/templates
+cp my-deploy-script.sh ~/.config/hookd/templates/
+# Future setups will auto-copy this into .hookd/handlers/
+```
+
 ## Architecture
 
 ```
@@ -25,6 +52,7 @@ GitHub ──webhook──▶ Tailscale Funnel ──▶ hookd listener ──�
 hookd/
 ├── cli.py              # CLI entry point (setup, status, logs, test, edit, rotate, disable, enable)
 ├── constants.py        # Shared constants
+├── global_config.py    # Global config (~/.config/hookd/) for token & templates
 ├── listener/           # HTTP server core
 │   ├── server.py       #   Webhook HTTP server with config hot-reload
 │   ├── verify.py       #   HMAC-SHA256 signature verification + replay protection
@@ -98,6 +126,7 @@ Handlers receive webhook data as environment variables:
 | Command | Description |
 |---------|-------------|
 | `hookd setup` | Launch the TUI setup wizard |
+| `hookd setup --quick` | Non-interactive setup using saved token and defaults |
 | `hookd status` | Show service and funnel status |
 | `hookd logs` | Tail service logs |
 | `hookd test [--event push]` | Send a test webhook to local listener |
