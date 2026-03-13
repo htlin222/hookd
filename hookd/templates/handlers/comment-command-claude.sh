@@ -14,6 +14,9 @@ set -euo pipefail
 #               HOOKD_ISSUE_TITLE, HOOKD_COMMENT_BODY, HOOKD_COMMENT_USER,
 #               HOOKD_WORKDIR
 
+# Ensure gh CLI uses the hookd token for API calls and git push
+export GH_TOKEN="${HOOKD_GITHUB_TOKEN:-}"
+
 COMMENT="$HOOKD_COMMENT_BODY"
 ISSUE_NUM="$HOOKD_ISSUE_NUMBER"
 

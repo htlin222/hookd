@@ -1,3 +1,5 @@
+import json
+
 from hookd.listener.parser import payload_to_env
 
 
@@ -49,3 +51,12 @@ def test_release_env():
     assert env["HOOKD_RELEASE_NAME"] == "Release 1.0"
     assert env["HOOKD_RELEASE_NOTES"] == "First release"
     assert "releases/tag/v1.0.0" in env["HOOKD_RELEASE_URL"]
+
+
+def test_payload_json_included(sample_push_payload):
+    """Full payload is available as JSON string."""
+    env = payload_to_env("push", sample_push_payload)
+    assert "HOOKD_PAYLOAD_JSON" in env
+    parsed = json.loads(env["HOOKD_PAYLOAD_JSON"])
+    assert parsed["ref"] == "refs/heads/main"
+    assert parsed["sender"]["login"] == "testuser"

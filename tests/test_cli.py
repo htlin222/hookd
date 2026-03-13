@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from hookd.cli import build_parser, _load_env, _get_port, cmd_test
+from hookd.cli import build_parser, _load_env, _get_port, cmd_test, _install_claude_handlers
 from hookd.constants import DEFAULT_PORT
 
 
@@ -35,6 +35,30 @@ def test_parser_setup_quick_with_branches():
     args = parser.parse_args(["setup", "-q", "--branches", "main,develop"])
     assert args.quick is True
     assert args.branches == "main,develop"
+
+
+def test_parser_setup_allowed_senders():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "-q", "--allowed-senders", "user1,user2"])
+    assert args.allowed_senders == "user1,user2"
+
+
+def test_parser_setup_allowed_senders_default():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "-q"])
+    assert args.allowed_senders is None
+
+
+def test_parser_setup_with_claude():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "-q", "--with-claude"])
+    assert args.with_claude is True
+
+
+def test_parser_setup_with_claude_default():
+    parser = build_parser()
+    args = parser.parse_args(["setup"])
+    assert args.with_claude is False
 
 
 def test_parser_status():
@@ -230,3 +254,37 @@ def test_cmd_test_non_push_event(tmp_path):
         body = json.loads(req.data)
         assert body["action"] == "opened"
         assert "commits" not in body
+
+
+# ---------------------------------------------------------------------------
+# _install_claude_handlers tests
+# ---------------------------------------------------------------------------
+
+def test_install_claude_handlers(tmp_path):
+    """_install_claude_handlers copies bundled templates."""
+    handlers_dir = tmp_path / "handlers"
+    _install_claude_handlers(handlers_dir)
+
+    assert handlers_dir.exists()
+    installed = sorted(f.name for f in handlers_dir.glob("*.sh"))
+    assert "comment-command-claude.sh" in installed
+    assert "issue-opened-claude.sh" in installed
+    assert "push-ci-claude.sh" in installed
+
+    # Check executable
+    for f in handlers_dir.glob("*.sh"):
+        assert f.stat().st_mode & 0o755
+
+
+def test_install_claude_handlers_no_overwrite(tmp_path):
+    """_install_claude_handlers does not overwrite existing files."""
+    handlers_dir = tmp_path / "handlers"
+    handlers_dir.mkdir()
+    existing = handlers_dir / "issue-opened-claude.sh"
+    existing.write_text("#!/bin/sh\n# my custom version")
+    existing.chmod(0o755)
+
+    _install_claude_handlers(handlers_dir)
+
+    # Custom version should be preserved
+    assert "my custom version" in existing.read_text()

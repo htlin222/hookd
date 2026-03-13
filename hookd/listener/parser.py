@@ -1,9 +1,11 @@
 def payload_to_env(event: str, payload: dict) -> dict[str, str]:
+    import json
     env: dict[str, str] = {
         "HOOKD_EVENT": event,
         "HOOKD_ACTION": str(payload.get("action", "")),
         "HOOKD_REPO": payload.get("repository", {}).get("full_name", ""),
         "HOOKD_SENDER": payload.get("sender", {}).get("login", ""),
+        "HOOKD_PAYLOAD_JSON": json.dumps(payload),
     }
 
     extractors = {

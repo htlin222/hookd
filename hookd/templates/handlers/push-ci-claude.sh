@@ -12,6 +12,9 @@ set -euo pipefail
 
 echo "[hookd] Push to ${HOOKD_BRANCH}: ${HOOKD_COMMIT_MESSAGES}"
 
+# Ensure gh CLI uses the hookd token for API calls and git push
+export GH_TOKEN="${HOOKD_GITHUB_TOKEN:-}"
+
 cd "$HOOKD_WORKDIR"
 
 # Fetch latest pushed state

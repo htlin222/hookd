@@ -12,6 +12,9 @@ set -euo pipefail
 
 echo "[hookd] New issue #${HOOKD_ISSUE_NUMBER}: ${HOOKD_ISSUE_TITLE}"
 
+# Ensure gh CLI uses the hookd token for API calls and git push
+export GH_TOKEN="${HOOKD_GITHUB_TOKEN:-}"
+
 cd "$HOOKD_WORKDIR"
 
 # Fetch latest and detect default branch

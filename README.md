@@ -160,6 +160,8 @@ Handlers receive webhook data as environment variables:
 | `HOOKD_ACTION` | all | Event action (opened, created, etc.) |
 | `HOOKD_REPO` | all | Repository full name (owner/repo) |
 | `HOOKD_SENDER` | all | User who triggered the event |
+| `HOOKD_PAYLOAD_JSON` | all | Full webhook payload as JSON string |
+| `HOOKD_WORKDIR` | all | Working directory (isolated git worktree) |
 | `HOOKD_BRANCH` | push | Branch name |
 | `HOOKD_PUSHER` | push | Who pushed |
 | `HOOKD_COMMIT_COUNT` | push | Number of commits |
