@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from hookd.constants import HOOKD_DIR, CONFIG_FILE, ENV_FILE, DEFAULT_PORT
+from hookd.constants import HOOKD_DIR, CONFIG_FILE, ENV_FILE, EVENTS_FILE, DEFAULT_PORT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +21,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Show service and funnel status")
 
-    sub.add_parser("logs", help="Tail service logs")
+    logs_parser = sub.add_parser("logs", help="Tail service logs")
+    logs_parser.add_argument(
+        "--json", action="store_true", dest="json_output",
+        help="Output raw JSON lines",
+    )
+    logs_parser.add_argument(
+        "-n", type=int, default=20,
+        help="Number of recent events to show (default: 20)",
+    )
+
+    sub.add_parser("list", help="List GitHub webhooks for the repository")
 
     test_parser = sub.add_parser("test", help="Send a test webhook event")
     test_parser.add_argument(
@@ -38,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("disable", help="Stop service and close funnel")
 
     sub.add_parser("enable", help="Start service and open funnel")
+
+    uninstall_parser = sub.add_parser("uninstall", help="Remove hookd completely")
+    uninstall_parser.add_argument(
+        "--yes", "-y", action="store_true",
+        help="Skip confirmation prompt",
+    )
 
     return parser
 
@@ -114,6 +130,7 @@ def cmd_status(args, workdir: Path):
 
 def cmd_logs(args, workdir: Path):
     from hookd.steps.system import detect_service_manager
+    from hookd.listener.server import EventLog
 
     manager = detect_service_manager()
     if manager == "systemd":
@@ -125,8 +142,34 @@ def cmd_logs(args, workdir: Path):
         else:
             print(f"Log file not found: {log_file}")
     else:
-        print("No service manager detected. Run the listener manually:")
-        print(f"  python -m hookd.listener --config {workdir / HOOKD_DIR / CONFIG_FILE}")
+        # Show recent events from events.jsonl
+        events_path = workdir / HOOKD_DIR / EVENTS_FILE
+        if not events_path.exists():
+            print("No event log found. Run the listener to generate events.")
+            return
+
+        event_log = EventLog(events_path)
+        entries = event_log.read(n=args.n)
+
+        if not entries:
+            print("No events recorded yet.")
+            return
+
+        if args.json_output:
+            for entry in entries:
+                print(json.dumps(entry))
+        else:
+            for entry in entries:
+                ts = entry.get("timestamp", "")
+                event = entry.get("event", "")
+                action = entry.get("action", "")
+                repo = entry.get("repo", "")
+                sender = entry.get("sender", "")
+                handlers = entry.get("handlers", [])
+                label = f"{event}"
+                if action:
+                    label += f".{action}"
+                print(f"[{ts}] {label}  repo={repo}  sender={sender}  handlers={len(handlers)}")
 
 
 def cmd_test(args, workdir: Path):
@@ -271,6 +314,128 @@ def cmd_enable(args, workdir: Path):
         print("Could not enable funnel")
 
 
+def cmd_list(args, workdir: Path):
+    from hookd.steps.github import list_webhooks
+
+    env = _load_env(workdir)
+    token = env.get("HOOKD_GITHUB_TOKEN", "")
+    repo = env.get("HOOKD_REPO", "")
+
+    if not token:
+        print("Error: No HOOKD_GITHUB_TOKEN found in .hookd/.env")
+        print("Run 'hookd setup' first or add HOOKD_GITHUB_TOKEN to .hookd/.env")
+        sys.exit(1)
+
+    if not repo:
+        print("Error: No HOOKD_REPO found in .hookd/.env")
+        print("Add HOOKD_REPO=owner/repo to .hookd/.env")
+        sys.exit(1)
+
+    try:
+        hooks = list_webhooks(token, repo)
+    except Exception as e:
+        print(f"Error fetching webhooks: {e}")
+        sys.exit(1)
+
+    if not hooks:
+        print(f"No webhooks found for {repo}")
+        return
+
+    print(f"Webhooks for {repo}:")
+    print()
+    for hook in hooks:
+        status = "active" if hook["active"] else "inactive"
+        events = ", ".join(hook["events"])
+        print(f"  ID:     {hook['id']}")
+        print(f"  URL:    {hook['url']}")
+        print(f"  Events: {events}")
+        print(f"  Status: {status}")
+        print()
+
+
+def cmd_uninstall(args, workdir: Path):
+    from hookd.steps.system import detect_service_manager
+    from hookd.steps.funnel import disable_funnel
+
+    hookd_dir = workdir / HOOKD_DIR
+    env = _load_env(workdir)
+    token = env.get("HOOKD_GITHUB_TOKEN", "")
+    repo = env.get("HOOKD_REPO", "")
+    manager = detect_service_manager()
+
+    # Print what will be removed
+    print("hookd uninstall will remove:")
+    if manager:
+        print(f"  - {manager} service for hookd")
+    print("  - Tailscale Funnel configuration")
+    if token and repo:
+        print(f"  - GitHub webhooks for {repo}")
+    if hookd_dir.exists():
+        print(f"  - {hookd_dir} directory")
+    print()
+
+    if not args.yes:
+        answer = input("Continue? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Aborted.")
+            return
+
+    removed = []
+
+    # Step 1: Stop service
+    if manager == "systemd":
+        subprocess.run(["systemctl", "--user", "stop", "hookd"], check=False)
+        subprocess.run(["systemctl", "--user", "disable", "hookd"], check=False)
+        service_path = Path.home() / ".config" / "systemd" / "user" / "hookd.service"
+        if service_path.exists():
+            subprocess.run(["rip", str(service_path)], check=False)
+            removed.append(f"systemd service ({service_path})")
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    elif manager == "launchd":
+        plist_path = Path.home() / "Library" / "LaunchAgents" / "com.hookd.listener.plist"
+        subprocess.run(
+            ["launchctl", "unload", str(plist_path)],
+            check=False,
+        )
+        if plist_path.exists():
+            subprocess.run(["rip", str(plist_path)], check=False)
+            removed.append(f"launchd service ({plist_path})")
+
+    # Step 2: Disable funnel
+    if disable_funnel():
+        removed.append("Tailscale Funnel")
+
+    # Step 3: Delete GitHub webhook
+    if token and repo:
+        try:
+            from hookd.steps.github import list_webhooks, delete_webhook
+
+            hooks = list_webhooks(token, repo)
+            for hook in hooks:
+                url = hook.get("url", "")
+                if "hookd" in url or url.endswith("/webhook"):
+                    delete_webhook(token, repo, hook["id"])
+                    removed.append(f"GitHub webhook {hook['id']}")
+        except Exception as e:
+            print(f"Warning: Could not remove GitHub webhooks: {e}")
+
+    # Step 4: Remove .hookd directory
+    if hookd_dir.exists():
+        subprocess.run(["rip", str(hookd_dir)], check=False)
+        removed.append(f"{hookd_dir} directory")
+
+    # Summary
+    print()
+    if removed:
+        print("Removed:")
+        for item in removed:
+            print(f"  - {item}")
+    else:
+        print("Nothing was removed.")
+    print()
+    print("hookd has been uninstalled.")
+
+
 _COMMANDS = {
     "setup": cmd_setup,
     "status": cmd_status,
@@ -280,6 +445,8 @@ _COMMANDS = {
     "rotate": cmd_rotate,
     "disable": cmd_disable,
     "enable": cmd_enable,
+    "list": cmd_list,
+    "uninstall": cmd_uninstall,
 }
 
 

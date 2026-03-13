@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -11,6 +12,48 @@ from hookd.listener.parser import payload_to_env
 from hookd.listener.dispatcher import Dispatcher
 
 logger = logging.getLogger("hookd")
+
+
+class EventLog:
+    """Append-only structured event log using JSON Lines format."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write(
+        self,
+        event: str,
+        action: str,
+        repo: str,
+        sender: str,
+        delivery_id: str,
+        handlers: list[str],
+        results: list[dict],
+    ) -> None:
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "action": action,
+            "repo": repo,
+            "sender": sender,
+            "delivery_id": delivery_id,
+            "handlers": handlers,
+            "results": results,
+        }
+        with open(self.path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def read(self, n: int = 20) -> list[dict]:
+        if not self.path.exists():
+            return []
+        lines = self.path.read_text().splitlines()
+        entries = []
+        for line in lines[-n:]:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+        return entries
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
@@ -83,6 +126,21 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 })
                 logger.error("Handler %s failed: %s", handler, exc)
 
+        # Log event to structured event log
+        if self.server.event_log:
+            action = payload.get("action", "")
+            repo = payload.get("repository", {}).get("full_name", "")
+            sender_login = payload.get("sender", {}).get("login", "")
+            self.server.event_log.write(
+                event=event,
+                action=action,
+                repo=repo,
+                sender=sender_login,
+                delivery_id=delivery_id,
+                handlers=[h for h in handlers],
+                results=results,
+            )
+
         self._respond(200, {"status": "ok", "event": event, "results": results})
 
     def _respond(self, code: int, body: dict):
@@ -98,13 +156,22 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 
 class HookdServer(HTTPServer):
-    def __init__(self, port: int, config: dict, secret: str, workdir: Path, config_path: Path | None = None):
+    def __init__(
+        self,
+        port: int,
+        config: dict,
+        secret: str,
+        workdir: Path,
+        config_path: Path | None = None,
+        event_log_path: Path | None = None,
+    ):
         super().__init__(("", port), WebhookHandler)
         self.webhook_secret = secret
         self.tracker = DeliveryTracker()
         self.dispatcher = Dispatcher(config)
         self.workdir = workdir
         self.config_path = config_path
+        self.event_log = EventLog(event_log_path) if event_log_path else None
         self._config_mtime: float = 0.0
         if config_path and config_path.exists():
             self._config_mtime = config_path.stat().st_mtime
@@ -130,5 +197,6 @@ def create_server(
     port: int,
     workdir: Path,
     config_path: Path | None = None,
+    event_log_path: Path | None = None,
 ) -> HookdServer:
-    return HookdServer(port, config, secret, workdir, config_path)
+    return HookdServer(port, config, secret, workdir, config_path, event_log_path)

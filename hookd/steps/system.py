@@ -18,12 +18,15 @@ def generate_env_file(
     secret: str,
     github_token: str,
     port: int,
+    repo: str = "",
 ) -> None:
     lines = [
         f"HOOKD_SECRET={secret}",
         f"HOOKD_GITHUB_TOKEN={github_token}",
         f"HOOKD_PORT={port}",
     ]
+    if repo:
+        lines.append(f"HOOKD_REPO={repo}")
     path.write_text("\n".join(lines) + "\n")
 
 
