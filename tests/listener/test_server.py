@@ -1,6 +1,7 @@
 import hmac
 import hashlib
 import json
+import time
 import threading
 import urllib.request
 
@@ -106,10 +107,16 @@ def test_valid_webhook_executes_handler(server_and_url, webhook_secret):
     )
     resp = urllib.request.urlopen(req)
     data = json.loads(resp.read())
-    assert data["status"] == "ok"
+    assert data["status"] == "accepted"
     assert data["event"] == "push"
 
-    marker = tmp_path / "marker.txt"
+    # Handler runs async (fire-and-forget), wait briefly for it to complete
+    for _ in range(20):
+        marker = tmp_path / "marker.txt"
+        if marker.exists():
+            break
+        time.sleep(0.1)
+
     assert marker.exists()
     assert "push:main" in marker.read_text()
 

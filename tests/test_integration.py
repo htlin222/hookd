@@ -1,6 +1,7 @@
 import hmac
 import hashlib
 import json
+import time
 import threading
 import urllib.request
 import urllib.error
@@ -76,12 +77,17 @@ def test_full_webhook_delivery(integration_server):
     resp = urllib.request.urlopen(req)
     data = json.loads(resp.read())
 
-    assert data["status"] == "ok"
+    assert data["status"] == "accepted"
     assert data["event"] == "push"
-    assert len(data["results"]) == 1
-    assert data["results"][0]["returncode"] == 0
+    assert data["handlers"] == [str(tmp_path / "handler.sh")]
 
+    # Handler runs async (fire-and-forget), wait briefly for it to complete
     marker = tmp_path / "marker.txt"
+    for _ in range(20):
+        if marker.exists():
+            break
+        time.sleep(0.1)
+
     assert marker.exists()
     content = marker.read_text().strip()
     assert "push" in content

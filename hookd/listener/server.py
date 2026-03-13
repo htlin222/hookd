@@ -1,8 +1,10 @@
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from socketserver import ThreadingMixIn
 
 import yaml
 
@@ -104,44 +106,38 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._respond(200, {"status": "no_handler", "event": event})
             return
 
-        results = []
+        # Fire-and-forget: respond immediately, run handlers in background
+        self._respond(200, {
+            "status": "accepted",
+            "event": event,
+            "handlers": handlers,
+        })
+
+        # Build event log callback
+        event_log = self.server.event_log
+        log_lock = self.server.event_log_lock
+        action = payload.get("action", "")
+        repo = payload.get("repository", {}).get("full_name", "")
+        sender_login = payload.get("sender", {}).get("login", "")
+
+        def _on_handler_done(handler_name, result_dict):
+            if event_log:
+                with log_lock:
+                    event_log.write(
+                        event=event,
+                        action=action,
+                        repo=repo,
+                        sender=sender_login,
+                        delivery_id=delivery_id,
+                        handlers=[handler_name],
+                        results=[result_dict],
+                    )
+
         for handler in handlers:
-            try:
-                result = self.server.dispatcher.execute(
-                    handler, env, self.server.workdir
-                )
-                results.append({
-                    "handler": handler,
-                    "returncode": result.returncode,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                })
-                logger.info(
-                    "Handler %s exited with %d", handler, result.returncode
-                )
-            except Exception as exc:
-                results.append({
-                    "handler": handler,
-                    "error": str(exc),
-                })
-                logger.error("Handler %s failed: %s", handler, exc)
-
-        # Log event to structured event log
-        if self.server.event_log:
-            action = payload.get("action", "")
-            repo = payload.get("repository", {}).get("full_name", "")
-            sender_login = payload.get("sender", {}).get("login", "")
-            self.server.event_log.write(
-                event=event,
-                action=action,
-                repo=repo,
-                sender=sender_login,
-                delivery_id=delivery_id,
-                handlers=[h for h in handlers],
-                results=results,
+            self.server.dispatcher.execute_async(
+                handler, env, self.server.workdir,
+                callback=_on_handler_done,
             )
-
-        self._respond(200, {"status": "ok", "event": event, "results": results})
 
     def _respond(self, code: int, body: dict):
         payload = json.dumps(body).encode()
@@ -155,7 +151,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
         logger.debug(format, *args)
 
 
-class HookdServer(HTTPServer):
+class HookdServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
     def __init__(
         self,
         port: int,
@@ -172,6 +170,7 @@ class HookdServer(HTTPServer):
         self.workdir = workdir
         self.config_path = config_path
         self.event_log = EventLog(event_log_path) if event_log_path else None
+        self.event_log_lock = threading.Lock()
         self._config_mtime: float = 0.0
         if config_path and config_path.exists():
             self._config_mtime = config_path.stat().st_mtime

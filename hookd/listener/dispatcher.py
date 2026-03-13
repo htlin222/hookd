@@ -1,6 +1,10 @@
+import logging
 import os
 import subprocess
+import threading
 from pathlib import Path
+
+logger = logging.getLogger("hookd")
 
 
 class Dispatcher:
@@ -43,3 +47,46 @@ class Dispatcher:
             text=True,
             timeout=timeout,
         )
+
+    def execute_async(
+        self,
+        handler: str,
+        env: dict[str, str],
+        workdir: Path,
+        callback=None,
+    ) -> threading.Thread:
+        """Fire-and-forget handler execution in a background thread.
+
+        The optional callback receives (handler, result_dict) when done.
+        """
+
+        def _run():
+            try:
+                result = self.execute(handler, env, workdir)
+                result_dict = {
+                    "handler": handler,
+                    "returncode": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+                logger.info("Handler %s exited with %d", handler, result.returncode)
+                if result.returncode != 0:
+                    logger.warning(
+                        "Handler %s stderr: %s", handler, result.stderr[:500]
+                    )
+            except subprocess.TimeoutExpired:
+                result_dict = {"handler": handler, "error": "timeout"}
+                logger.error("Handler %s timed out", handler)
+            except Exception as exc:
+                result_dict = {"handler": handler, "error": str(exc)}
+                logger.error("Handler %s failed: %s", handler, exc)
+
+            if callback:
+                try:
+                    callback(handler, result_dict)
+                except Exception as exc:
+                    logger.error("Callback error for %s: %s", handler, exc)
+
+        thread = threading.Thread(target=_run, name=f"hookd-{handler}", daemon=True)
+        thread.start()
+        return thread
