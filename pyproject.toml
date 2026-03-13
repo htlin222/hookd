@@ -36,8 +36,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/htlin/hookd"
-Repository = "https://github.com/htlin/hookd"
+Homepage = "https://github.com/htlin222/hookd"
+Repository = "https://github.com/htlin222/hookd"
 
 [build-system]
 requires = ["hatchling"]
