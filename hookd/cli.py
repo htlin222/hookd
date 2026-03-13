@@ -17,7 +17,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("setup", help="Launch the setup wizard")
+    setup_parser = sub.add_parser("setup", help="Launch the setup wizard")
+    setup_parser.add_argument(
+        "--quick", "-q", action="store_true",
+        help="Non-interactive setup using defaults and saved global token",
+    )
+    setup_parser.add_argument(
+        "--events", default="push",
+        help="Comma-separated event types for quick setup (default: push)",
+    )
+    setup_parser.add_argument(
+        "--branches", default=None,
+        help="Comma-separated branches for push events (default: repo default branch or main)",
+    )
 
     sub.add_parser("status", help="Show service and funnel status")
 
@@ -77,6 +89,10 @@ def _get_port(env: dict[str, str], args_port: int | None = None) -> int:
 
 
 def cmd_setup(args, workdir: Path):
+    if getattr(args, "quick", False):
+        _quick_setup(args, workdir)
+        return
+
     from hookd.steps.detect import detect_git_context
     from hookd.tui.app import HookdApp
 
@@ -91,6 +107,162 @@ def cmd_setup(args, workdir: Path):
     }
     app = HookdApp(context=context)
     app.run()
+
+
+def _quick_setup(args, workdir: Path):
+    """Non-interactive setup using saved global token and sensible defaults."""
+    import secrets as secrets_mod
+
+    from hookd.steps.detect import detect_git_context
+    from hookd.global_config import get_global_token, copy_global_templates
+    from hookd.templates import render_template
+    from hookd.steps.system import generate_env_file
+
+    # 1. Detect repo
+    git_ctx = detect_git_context(workdir)
+    if not git_ctx.full_name:
+        print("Error: No Git repository detected. Run from a Git repo with a GitHub remote.")
+        sys.exit(1)
+    print(f"Repository: {git_ctx.full_name}")
+
+    # 2. Resolve token
+    token = get_global_token()
+    if not token:
+        print("Error: No saved GitHub token found.")
+        print("Run 'hookd setup' (interactive) first to save a token,")
+        print("or manually save one with: mkdir -p ~/.config/hookd && echo 'HOOKD_GITHUB_TOKEN=ghp_...' > ~/.config/hookd/global.env")
+        sys.exit(1)
+
+    # Validate token
+    from hookd.steps.github import validate_token
+    username = validate_token(token)
+    if not username:
+        print("Error: Saved global token is invalid. Run 'hookd setup' to update it.")
+        sys.exit(1)
+    print(f"GitHub user: {username}")
+
+    # 3. Build events config
+    branch = args.branches or git_ctx.branch or "main"
+    branches = [b.strip() for b in branch.split(",") if b.strip()]
+    event_names = [e.strip() for e in args.events.split(",") if e.strip()]
+
+    events_config = []
+    for evt_name in event_names:
+        if evt_name == "push":
+            branch_handlers = {b: f"handlers/push-{b}.sh" for b in branches}
+            events_config.append({"name": "push", "branches": branch_handlers})
+        else:
+            # Default actions per event type
+            from hookd.tui.screens.events import EVENT_ACTIONS
+            actions = EVENT_ACTIONS.get(evt_name, ["opened"])
+            action_handlers = {a: f"handlers/{evt_name}-{a}.sh" for a in actions}
+            events_config.append({"name": evt_name, "actions": action_handlers})
+
+    # 4. Generate secret
+    secret = secrets_mod.token_hex(32)
+    port = DEFAULT_PORT
+
+    # 5. Create .hookd directory
+    hookd_dir = workdir / HOOKD_DIR
+    hookd_dir.mkdir(parents=True, exist_ok=True)
+    (hookd_dir / "handlers").mkdir(exist_ok=True)
+    print("Created .hookd/")
+
+    # 6. Write config.yaml
+    config_content = render_template("config.yaml.j2", events=events_config)
+    (hookd_dir / CONFIG_FILE).write_text(config_content)
+    print("Written config.yaml")
+
+    # 7. Create handler scripts
+    for evt in events_config:
+        name = evt["name"]
+        if name == "push":
+            for b, handler_path in evt["branches"].items():
+                content = render_template(
+                    "handler.sh.j2",
+                    handler_name=f"push-{b}",
+                    event_type="push",
+                    handler_body=f'echo "[hookd] Push to {b}"',
+                )
+                fpath = hookd_dir / handler_path
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.write_text(content)
+                fpath.chmod(0o755)
+                print(f"Created {handler_path}")
+        else:
+            for action, handler_path in evt["actions"].items():
+                content = render_template(
+                    "handler.sh.j2",
+                    handler_name=f"{name}-{action}",
+                    event_type=name,
+                    handler_body=f'echo "[hookd] {name} {action}"',
+                )
+                fpath = hookd_dir / handler_path
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.write_text(content)
+                fpath.chmod(0o755)
+                print(f"Created {handler_path}")
+
+    # 7b. Copy global templates
+    copied = copy_global_templates(hookd_dir / "handlers")
+    if copied:
+        print(f"Copied {len(copied)} global template(s): {', '.join(copied)}")
+
+    # 8. Write .env
+    generate_env_file(
+        path=hookd_dir / ".env",
+        secret=secret,
+        github_token=token,
+        port=port,
+        repo=git_ctx.full_name,
+    )
+    print("Written .env")
+
+    # 9. Register webhook on GitHub
+    try:
+        from hookd.steps.github import create_webhook
+        from hookd.steps.funnel import get_tailscale_hostname, get_funnel_url
+
+        hostname = get_tailscale_hostname()
+        if hostname:
+            funnel_url = get_funnel_url(hostname, port)
+        else:
+            funnel_url = f"https://localhost:{port}"
+
+        create_webhook(
+            token=token,
+            full_name=git_ctx.full_name,
+            url=funnel_url,
+            secret=secret,
+            events=[e["name"] for e in events_config],
+        )
+        print(f"Webhook registered at {funnel_url}")
+    except Exception as exc:
+        print(f"Warning: Could not register webhook: {exc}")
+        print("You can register it manually later.")
+
+    # 10. Install system service
+    try:
+        from hookd.steps.system import detect_service_manager, generate_service_file, install_service
+
+        manager = detect_service_manager()
+        if manager:
+            content = generate_service_file(manager=manager, workdir=str(workdir), port=port)
+            svc_path = install_service(manager, content, str(workdir))
+            print(f"Service installed: {svc_path}")
+    except Exception as exc:
+        print(f"Warning: Could not install service: {exc}")
+
+    print()
+    print("Quick setup complete!")
+    print(f"  Repository: {git_ctx.full_name}")
+    print(f"  Events: {', '.join(event_names)}")
+    print(f"  Port: {port}")
+    print()
+    print("Next steps:")
+    print("  hookd enable    Start the service and funnel")
+    print("  hookd test      Send a test webhook")
+    print("  hookd edit      Customize your config")
 
 
 def cmd_status(args, workdir: Path):

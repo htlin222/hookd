@@ -13,6 +13,28 @@ def test_parser_setup():
     parser = build_parser()
     args = parser.parse_args(["setup"])
     assert args.command == "setup"
+    assert args.quick is False
+
+
+def test_parser_setup_quick():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "--quick"])
+    assert args.command == "setup"
+    assert args.quick is True
+    assert args.events == "push"
+
+
+def test_parser_setup_quick_with_events():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "--quick", "--events", "push,issues"])
+    assert args.events == "push,issues"
+
+
+def test_parser_setup_quick_with_branches():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "-q", "--branches", "main,develop"])
+    assert args.quick is True
+    assert args.branches == "main,develop"
 
 
 def test_parser_status():
