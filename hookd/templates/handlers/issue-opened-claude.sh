@@ -5,21 +5,22 @@ set -euo pipefail
 # When a new issue is created, Claude automatically creates a branch,
 # analyzes the issue, implements a fix, and opens a PR.
 #
+# Runs inside an isolated git worktree (provided by hookd).
+#
 # Required env: HOOKD_GITHUB_TOKEN, HOOKD_REPO, HOOKD_ISSUE_NUMBER,
 #               HOOKD_ISSUE_TITLE, HOOKD_ISSUE_BODY, HOOKD_WORKDIR
 
 echo "[hookd] New issue #${HOOKD_ISSUE_NUMBER}: ${HOOKD_ISSUE_TITLE}"
 
-# Ensure we're on a clean default branch
 cd "$HOOKD_WORKDIR"
+
+# Fetch latest and detect default branch
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
 git fetch origin "$DEFAULT_BRANCH" --quiet
-git checkout "$DEFAULT_BRANCH" --quiet
-git reset --hard "origin/$DEFAULT_BRANCH" --quiet
 
-# Create a feature branch
+# Create a feature branch from latest origin
 BRANCH_NAME="hookd/issue-${HOOKD_ISSUE_NUMBER}"
-git checkout -b "$BRANCH_NAME" --quiet
+git checkout -b "$BRANCH_NAME" "origin/$DEFAULT_BRANCH" --quiet
 
 # Build the prompt for claude
 PROMPT="You are working on repo ${HOOKD_REPO}.

@@ -8,6 +8,7 @@ set -euo pipefail
 #   /ask <question> - Claude answers a question about the codebase
 #
 # Only triggers on comments starting with "/" to avoid noise.
+# Runs inside an isolated git worktree (provided by hookd).
 #
 # Required env: HOOKD_GITHUB_TOKEN, HOOKD_REPO, HOOKD_ISSUE_NUMBER,
 #               HOOKD_ISSUE_TITLE, HOOKD_COMMENT_BODY, HOOKD_COMMENT_USER,
@@ -33,17 +34,16 @@ gh api "repos/${HOOKD_REPO}/issues/comments/$(gh api "repos/${HOOKD_REPO}/issues
     -f content='eyes' --silent 2>/dev/null || true
 
 cd "$HOOKD_WORKDIR"
+
+# Fetch latest and detect default branch
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
 git fetch origin "$DEFAULT_BRANCH" --quiet
 
 case "$COMMAND" in
     /fix)
-        # Create branch, let claude fix, push PR
-        git checkout "$DEFAULT_BRANCH" --quiet
-        git reset --hard "origin/$DEFAULT_BRANCH" --quiet
-
+        # Create branch from latest origin, let claude fix, push PR
         BRANCH_NAME="hookd/fix-${ISSUE_NUM}-$(date +%s)"
-        git checkout -b "$BRANCH_NAME" --quiet
+        git checkout -b "$BRANCH_NAME" "origin/$DEFAULT_BRANCH" --quiet
 
         # Get the full issue context
         ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "$HOOKD_REPO" --json body --jq '.body')
@@ -112,10 +112,7 @@ ${REVIEW}
         ;;
 
     /ask)
-        # Answer a question about the codebase
-        git checkout "$DEFAULT_BRANCH" --quiet
-        git reset --hard "origin/$DEFAULT_BRANCH" --quiet
-
+        # Answer a question about the codebase (worktree already has the code)
         PROMPT="You are answering a question about repo ${HOOKD_REPO}.
 
 Context — Issue #${ISSUE_NUM}: ${HOOKD_ISSUE_TITLE}
