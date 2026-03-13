@@ -41,6 +41,63 @@ cp my-deploy-script.sh ~/.config/hookd/templates/
 # Future setups will auto-copy this into .hookd/handlers/
 ```
 
+## Claude-Powered Automation
+
+hookd ships with handler templates that integrate with [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Install them with `--with-claude`:
+
+```bash
+hookd setup --quick --events issues,issue_comment --with-claude
+```
+
+This installs three handlers:
+
+### `issue-opened-claude.sh` — Auto-fix new issues
+
+When a new issue is created, Claude automatically:
+1. Creates a branch `hookd/issue-<number>`
+2. Analyzes the issue description
+3. Implements the fix
+4. Runs tests
+5. Opens a PR linking back to the issue
+
+### `comment-command-claude.sh` — Slash commands in comments
+
+Leave a comment on any issue to trigger Claude:
+
+| Command | What it does |
+|---------|-------------|
+| `/fix` | Claude creates a branch, fixes the issue, opens a PR |
+| `/fix refactor the auth module` | Fix with specific instructions |
+| `/review` | Claude reviews the PR diff and posts feedback |
+| `/ask how does the auth flow work?` | Claude answers a question about the codebase |
+
+### `push-ci-claude.sh` — Auto-fix failing tests
+
+On push, runs your test suite. If tests fail, Claude analyzes the failure, fixes the code, and pushes a fix commit.
+
+### Security: `allowed_senders`
+
+By default, only the GitHub token owner can trigger handlers. This prevents random users from triggering Claude via issue comments.
+
+```yaml
+# .hookd/config.yaml
+allowed_senders:
+  - htlin222
+  - trusted-teammate
+
+events:
+  issue_comment:
+    created: handlers/comment-command-claude.sh
+```
+
+When `allowed_senders` is set, webhooks from unlisted users are rejected with 403. Omit the field to allow all senders.
+
+Use `--allowed-senders` with quick setup:
+
+```bash
+hookd setup --quick --events issues,issue_comment --with-claude --allowed-senders htlin222,collaborator
+```
+
 ## Architecture
 
 ```
@@ -74,6 +131,9 @@ hookd/
 The setup wizard generates `.hookd/config.yaml`:
 
 ```yaml
+allowed_senders:        # optional — omit to allow all
+  - htlin222
+
 events:
   push:
     branches:
@@ -127,6 +187,7 @@ Handlers receive webhook data as environment variables:
 |---------|-------------|
 | `hookd setup` | Launch the TUI setup wizard |
 | `hookd setup --quick` | Non-interactive setup using saved token and defaults |
+| `hookd setup --quick --with-claude` | Quick setup with Claude-powered handler templates |
 | `hookd status` | Show service and funnel status |
 | `hookd logs` | Tail service logs |
 | `hookd test [--event push]` | Send a test webhook to local listener |

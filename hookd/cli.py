@@ -30,6 +30,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--branches", default=None,
         help="Comma-separated branches for push events (default: repo default branch or main)",
     )
+    setup_parser.add_argument(
+        "--allowed-senders", default=None,
+        help="Comma-separated GitHub usernames allowed to trigger handlers (default: token owner)",
+    )
+    setup_parser.add_argument(
+        "--with-claude", action="store_true",
+        help="Install Claude-powered handler templates (issue auto-fix, /fix command, CI auto-fix)",
+    )
 
     sub.add_parser("status", help="Show service and funnel status")
 
@@ -109,6 +117,21 @@ def cmd_setup(args, workdir: Path):
     app.run()
 
 
+def _install_claude_handlers(handlers_dir: Path):
+    """Copy bundled Claude-powered handler templates into the project."""
+    import shutil
+    bundled_dir = Path(__file__).parent / "templates" / "handlers"
+    if not bundled_dir.exists():
+        return
+    handlers_dir.mkdir(parents=True, exist_ok=True)
+    for template in sorted(bundled_dir.glob("*.sh")):
+        dest = handlers_dir / template.name
+        if not dest.exists():
+            shutil.copy2(template, dest)
+            dest.chmod(0o755)
+            print(f"  Installed {template.name}")
+
+
 def _quick_setup(args, workdir: Path):
     """Non-interactive setup using saved global token and sensible defaults."""
     import secrets as secrets_mod
@@ -141,6 +164,14 @@ def _quick_setup(args, workdir: Path):
         sys.exit(1)
     print(f"GitHub user: {username}")
 
+    # 2b. Resolve allowed_senders
+    if args.allowed_senders:
+        allowed_senders = [s.strip() for s in args.allowed_senders.split(",") if s.strip()]
+    else:
+        # Default: only the token owner can trigger handlers
+        allowed_senders = [username]
+    print(f"Allowed senders: {', '.join(allowed_senders)}")
+
     # 3. Build events config
     branch = args.branches or git_ctx.branch or "main"
     branches = [b.strip() for b in branch.split(",") if b.strip()]
@@ -169,7 +200,9 @@ def _quick_setup(args, workdir: Path):
     print("Created .hookd/")
 
     # 6. Write config.yaml
-    config_content = render_template("config.yaml.j2", events=events_config)
+    config_content = render_template(
+        "config.yaml.j2", events=events_config, allowed_senders=allowed_senders,
+    )
     (hookd_dir / CONFIG_FILE).write_text(config_content)
     print("Written config.yaml")
 
@@ -207,6 +240,10 @@ def _quick_setup(args, workdir: Path):
     copied = copy_global_templates(hookd_dir / "handlers")
     if copied:
         print(f"Copied {len(copied)} global template(s): {', '.join(copied)}")
+
+    # 7c. Install Claude-powered handler templates
+    if getattr(args, "with_claude", False):
+        _install_claude_handlers(hookd_dir / "handlers")
 
     # 8. Write .env
     generate_env_file(

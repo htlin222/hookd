@@ -1,3 +1,10 @@
+{% if allowed_senders is defined and allowed_senders %}
+allowed_senders:
+{% for sender in allowed_senders %}
+  - {{ sender }}
+{% endfor %}
+
+{% endif %}
 events:
 {% for event in events %}
   {{ event.name }}:
