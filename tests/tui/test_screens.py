@@ -150,7 +150,7 @@ async def test_preflight_screen_shows_checklist():
             await pilot.pause()
 
             dep_status = app.screen.query_one("#dep_status", Static)
-            assert "Dependencies" in str(dep_status.renderable)
+            assert "Dependencies" in _get_static_text(dep_status)
 
             # Continue should be enabled when deps are met
             btn = app.screen.query_one("#continue", Button)
