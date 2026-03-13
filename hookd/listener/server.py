@@ -2,7 +2,8 @@ import json
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from functools import partial
+
+import yaml
 
 from hookd.constants import SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER
 from hookd.listener.verify import verify_signature, DeliveryTracker
@@ -50,6 +51,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "Invalid JSON"})
             return
 
+        self.server.maybe_reload_config()
+
         env = payload_to_env(event, payload)
         handlers = self.server.dispatcher.find_handlers(event, payload)
 
@@ -94,15 +97,38 @@ class WebhookHandler(BaseHTTPRequestHandler):
         logger.debug(format, *args)
 
 
+class HookdServer(HTTPServer):
+    def __init__(self, port: int, config: dict, secret: str, workdir: Path, config_path: Path | None = None):
+        super().__init__(("", port), WebhookHandler)
+        self.webhook_secret = secret
+        self.tracker = DeliveryTracker()
+        self.dispatcher = Dispatcher(config)
+        self.workdir = workdir
+        self.config_path = config_path
+        self._config_mtime: float = 0.0
+        if config_path and config_path.exists():
+            self._config_mtime = config_path.stat().st_mtime
+
+    def maybe_reload_config(self):
+        if not self.config_path or not self.config_path.exists():
+            return
+        try:
+            mtime = self.config_path.stat().st_mtime
+            if mtime > self._config_mtime:
+                with open(self.config_path) as f:
+                    config = yaml.safe_load(f) or {}
+                self.dispatcher = Dispatcher(config)
+                self._config_mtime = mtime
+                logger.info("Config reloaded from %s", self.config_path)
+        except Exception as exc:
+            logger.error("Failed to reload config: %s", exc)
+
+
 def create_server(
     config: dict,
     secret: str,
     port: int,
     workdir: Path,
-) -> HTTPServer:
-    server = HTTPServer(("", port), WebhookHandler)
-    server.webhook_secret = secret
-    server.tracker = DeliveryTracker()
-    server.dispatcher = Dispatcher(config)
-    server.workdir = workdir
-    return server
+    config_path: Path | None = None,
+) -> HookdServer:
+    return HookdServer(port, config, secret, workdir, config_path)
