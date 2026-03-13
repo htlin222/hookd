@@ -98,6 +98,13 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         self.server.maybe_reload_config()
 
+        # Check sender authorization
+        sender = payload.get("sender", {}).get("login", "")
+        if self.server.allowed_senders and sender not in self.server.allowed_senders:
+            logger.warning("Sender %s not in allowed_senders, ignoring %s", sender, event)
+            self._respond(403, {"error": "Sender not authorized", "sender": sender})
+            return
+
         env = payload_to_env(event, payload)
         handlers = self.server.dispatcher.find_handlers(event, payload)
 
@@ -169,6 +176,7 @@ class HookdServer(ThreadingMixIn, HTTPServer):
         self.dispatcher = Dispatcher(config)
         self.workdir = workdir
         self.config_path = config_path
+        self.allowed_senders: set[str] = set(config.get("allowed_senders", []))
         self.event_log = EventLog(event_log_path) if event_log_path else None
         self.event_log_lock = threading.Lock()
         self._config_mtime: float = 0.0
@@ -184,6 +192,7 @@ class HookdServer(ThreadingMixIn, HTTPServer):
                 with open(self.config_path) as f:
                     config = yaml.safe_load(f) or {}
                 self.dispatcher = Dispatcher(config)
+                self.allowed_senders = set(config.get("allowed_senders", []))
                 self._config_mtime = mtime
                 logger.info("Config reloaded from %s", self.config_path)
         except Exception as exc:
