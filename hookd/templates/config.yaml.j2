@@ -1,0 +1,14 @@
+events:
+{% for event in events %}
+  {{ event.name }}:
+{% if event.name == "push" %}
+    branches:
+{% for branch, handler in event.branches.items() %}
+      {{ branch }}: {{ handler }}
+{% endfor %}
+{% else %}
+{% for action, handler in event.actions.items() %}
+    {{ action }}: {{ handler }}
+{% endfor %}
+{% endif %}
+{% endfor %}

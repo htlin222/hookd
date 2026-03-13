@@ -1,0 +1,14 @@
+[Unit]
+Description=hookd - GitHub webhook listener
+After=network.target tailscaled.service
+
+[Service]
+Type=simple
+WorkingDirectory={{ workdir }}
+EnvironmentFile={{ workdir }}/.hookd/.env
+ExecStart={{ python_path }} -m hookd.listener --config {{ workdir }}/.hookd/config.yaml --port {{ port }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
