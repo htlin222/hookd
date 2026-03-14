@@ -23,9 +23,15 @@ class TailscaleStatus:
 
 def check_dependencies(
     required: list[str] | None = None,
+    tunnel: str = "tailscale",
 ) -> PreflightResult:
     if required is None:
-        required = ["git", "tailscale", "bash"]
+        base = ["git", "bash"]
+        if tunnel == "tailscale":
+            base.append("tailscale")
+        elif tunnel == "cloudflare":
+            base.append("cloudflared")
+        required = base
 
     result = PreflightResult()
     for dep in required:

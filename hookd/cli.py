@@ -13,7 +13,7 @@ from hookd.constants import HOOKD_DIR, CONFIG_FILE, ENV_FILE, EVENTS_FILE, DEFAU
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hookd",
-        description="GitHub webhook listener via Tailscale Funnel",
+        description="GitHub webhook listener with pluggable tunnel support",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -38,8 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-claude", action="store_true",
         help="Install Claude-powered handler templates (issue auto-fix, /fix command, CI auto-fix)",
     )
+    setup_parser.add_argument(
+        "--tunnel", default="tailscale",
+        choices=["tailscale", "cloudflare", "none"],
+        help="Tunnel provider for public exposure (default: tailscale)",
+    )
 
-    sub.add_parser("status", help="Show service and funnel status")
+    sub.add_parser("status", help="Show service and tunnel status")
 
     logs_parser = sub.add_parser("logs", help="Tail service logs")
     logs_parser.add_argument(
@@ -65,9 +70,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("rotate", help="Rotate webhook secret")
 
-    sub.add_parser("disable", help="Stop service and close funnel")
+    disable_parser = sub.add_parser("disable", help="Stop service and close tunnel")
+    disable_parser.add_argument(
+        "--tunnel", default=None,
+        choices=["tailscale", "cloudflare", "none"],
+        help="Tunnel provider to disable (default: from .env or tailscale)",
+    )
 
-    sub.add_parser("enable", help="Start service and open funnel")
+    enable_parser = sub.add_parser("enable", help="Start service and open tunnel")
+    enable_parser.add_argument(
+        "--tunnel", default=None,
+        choices=["tailscale", "cloudflare", "none"],
+        help="Tunnel provider to enable (default: from .env or tailscale)",
+    )
 
     uninstall_parser = sub.add_parser("uninstall", help="Remove hookd completely")
     uninstall_parser.add_argument(
@@ -246,34 +261,34 @@ def _quick_setup(args, workdir: Path):
         _install_claude_handlers(hookd_dir / "handlers")
 
     # 8. Write .env
+    tunnel_name = getattr(args, "tunnel", "tailscale")
     generate_env_file(
         path=hookd_dir / ".env",
         secret=secret,
         github_token=token,
         port=port,
         repo=git_ctx.full_name,
+        tunnel=tunnel_name,
     )
     print("Written .env")
 
     # 9. Register webhook on GitHub
     try:
         from hookd.steps.github import create_webhook
-        from hookd.steps.funnel import get_tailscale_hostname, get_funnel_url
+        from hookd.steps.tunnel import get_tunnel_provider
 
-        hostname = get_tailscale_hostname()
-        if hostname:
-            funnel_url = get_funnel_url(hostname, port)
-        else:
-            funnel_url = f"https://localhost:{port}"
+        tunnel_name = getattr(args, "tunnel", "tailscale")
+        tunnel = get_tunnel_provider(tunnel_name)
+        public_url = tunnel.get_public_url(port) or f"https://localhost:{port}"
 
         create_webhook(
             token=token,
             full_name=git_ctx.full_name,
-            url=funnel_url,
+            url=public_url,
             secret=secret,
             events=[e["name"] for e in events_config],
         )
-        print(f"Webhook registered at {funnel_url}")
+        print(f"Webhook registered at {public_url}")
     except Exception as exc:
         print(f"Warning: Could not register webhook: {exc}")
         print("You can register it manually later.")
@@ -304,10 +319,11 @@ def _quick_setup(args, workdir: Path):
 
 def cmd_status(args, workdir: Path):
     from hookd.steps.system import detect_service_manager
-    from hookd.steps.funnel import check_funnel_status, get_tailscale_hostname
+    from hookd.steps.tunnel import get_tunnel_provider
 
     env = _load_env(workdir)
     port = _get_port(env)
+    tunnel_name = env.get("HOOKD_TUNNEL", "tailscale")
 
     manager = detect_service_manager()
     print(f"Service manager: {manager or 'none detected'}")
@@ -329,12 +345,13 @@ def cmd_status(args, workdir: Path):
         else:
             print("Service: not loaded")
 
-    hostname = get_tailscale_hostname()
-    if hostname:
-        print(f"Tailscale hostname: {hostname}")
-        print(f"Funnel URL: https://{hostname}:{port}/webhook")
+    tunnel = get_tunnel_provider(tunnel_name)
+    print(f"Tunnel: {tunnel_name}")
+    public_url = tunnel.get_public_url(port)
+    if public_url:
+        print(f"Public URL: {public_url}/webhook")
     else:
-        print("Tailscale: not detected")
+        print(f"Tunnel URL: not available (is {tunnel_name} running?)")
 
 
 def cmd_logs(args, workdir: Path):
@@ -480,7 +497,10 @@ def cmd_rotate(args, workdir: Path):
 
 def cmd_disable(args, workdir: Path):
     from hookd.steps.system import detect_service_manager
-    from hookd.steps.funnel import disable_funnel
+    from hookd.steps.tunnel import get_tunnel_provider
+
+    env = _load_env(workdir)
+    tunnel_name = getattr(args, "tunnel", None) or env.get("HOOKD_TUNNEL", "tailscale")
 
     manager = detect_service_manager()
     if manager == "systemd":
@@ -493,18 +513,20 @@ def cmd_disable(args, workdir: Path):
         )
         print("Unloaded launchd service")
 
-    if disable_funnel():
-        print("Disabled Tailscale Funnel")
+    tunnel = get_tunnel_provider(tunnel_name)
+    if tunnel.disable():
+        print(f"Disabled {tunnel_name} tunnel")
     else:
-        print("Could not disable funnel (may not be running)")
+        print(f"Could not disable {tunnel_name} tunnel (may not be running)")
 
 
 def cmd_enable(args, workdir: Path):
     from hookd.steps.system import detect_service_manager
-    from hookd.steps.funnel import enable_funnel
+    from hookd.steps.tunnel import get_tunnel_provider
 
     env = _load_env(workdir)
     port = _get_port(env)
+    tunnel_name = getattr(args, "tunnel", None) or env.get("HOOKD_TUNNEL", "tailscale")
 
     manager = detect_service_manager()
     if manager == "systemd":
@@ -517,10 +539,11 @@ def cmd_enable(args, workdir: Path):
         )
         print("Loaded launchd service")
 
-    if enable_funnel(port):
-        print(f"Enabled Tailscale Funnel on port {port}")
+    tunnel = get_tunnel_provider(tunnel_name)
+    if tunnel.enable(port):
+        print(f"Enabled {tunnel_name} tunnel on port {port}")
     else:
-        print("Could not enable funnel")
+        print(f"Could not enable {tunnel_name} tunnel")
 
 
 def cmd_list(args, workdir: Path):
@@ -562,21 +585,36 @@ def cmd_list(args, workdir: Path):
         print()
 
 
+def _safe_remove(path: Path) -> bool:
+    """Remove a file or directory, falling back to shutil if rip is unavailable."""
+    import shutil
+    if shutil.which("rip"):
+        result = subprocess.run(["rip", str(path)], check=False)
+        return result.returncode == 0
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+    return True
+
+
 def cmd_uninstall(args, workdir: Path):
     from hookd.steps.system import detect_service_manager
-    from hookd.steps.funnel import disable_funnel
+    from hookd.steps.tunnel import get_tunnel_provider
 
     hookd_dir = workdir / HOOKD_DIR
     env = _load_env(workdir)
     token = env.get("HOOKD_GITHUB_TOKEN", "")
     repo = env.get("HOOKD_REPO", "")
+    tunnel_name = env.get("HOOKD_TUNNEL", "tailscale")
     manager = detect_service_manager()
 
     # Print what will be removed
     print("hookd uninstall will remove:")
     if manager:
         print(f"  - {manager} service for hookd")
-    print("  - Tailscale Funnel configuration")
+    if tunnel_name != "none":
+        print(f"  - {tunnel_name} tunnel configuration")
     if token and repo:
         print(f"  - GitHub webhooks for {repo}")
     if hookd_dir.exists():
@@ -597,7 +635,7 @@ def cmd_uninstall(args, workdir: Path):
         subprocess.run(["systemctl", "--user", "disable", "hookd"], check=False)
         service_path = Path.home() / ".config" / "systemd" / "user" / "hookd.service"
         if service_path.exists():
-            subprocess.run(["rip", str(service_path)], check=False)
+            _safe_remove(service_path)
             removed.append(f"systemd service ({service_path})")
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     elif manager == "launchd":
@@ -607,12 +645,13 @@ def cmd_uninstall(args, workdir: Path):
             check=False,
         )
         if plist_path.exists():
-            subprocess.run(["rip", str(plist_path)], check=False)
+            _safe_remove(plist_path)
             removed.append(f"launchd service ({plist_path})")
 
-    # Step 2: Disable funnel
-    if disable_funnel():
-        removed.append("Tailscale Funnel")
+    # Step 2: Disable tunnel
+    tunnel = get_tunnel_provider(tunnel_name)
+    if tunnel.disable():
+        removed.append(f"{tunnel_name} tunnel")
 
     # Step 3: Delete GitHub webhook
     if token and repo:
@@ -630,7 +669,7 @@ def cmd_uninstall(args, workdir: Path):
 
     # Step 4: Remove .hookd directory
     if hookd_dir.exists():
-        subprocess.run(["rip", str(hookd_dir)], check=False)
+        _safe_remove(hookd_dir)
         removed.append(f"{hookd_dir} directory")
 
     # Summary

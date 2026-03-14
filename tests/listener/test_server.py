@@ -233,6 +233,30 @@ def test_unauthorized_sender_rejected(restricted_server, webhook_secret):
         assert e.code == 403
 
 
+def test_invalid_content_length_returns_400(server_and_url, webhook_secret):
+    """Invalid Content-Length header returns 400."""
+    _, url, _ = server_and_url
+    body = b'{"ref": "refs/heads/main"}'
+    sig = _sign(webhook_secret, body)
+
+    req = urllib.request.Request(
+        f"{url}/webhook",
+        data=body,
+        headers={
+            "X-Hub-Signature-256": sig,
+            "X-GitHub-Event": "push",
+            "X-GitHub-Delivery": "d-badlen-1",
+            "Content-Type": "application/json",
+            "Content-Length": "not-a-number",
+        },
+    )
+    try:
+        urllib.request.urlopen(req)
+        pytest.fail("Expected 400")
+    except urllib.error.HTTPError as e:
+        assert e.code == 400
+
+
 def test_no_allowed_senders_allows_all(server_and_url, webhook_secret):
     """When allowed_senders is not configured, all senders are accepted."""
     _, url, _ = server_and_url

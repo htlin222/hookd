@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from hookd.cli import build_parser, _load_env, _get_port, cmd_test, _install_claude_handlers
+from hookd.cli import build_parser, _load_env, _get_port, cmd_test, _install_claude_handlers, _safe_remove
 from hookd.constants import DEFAULT_PORT
 
 
@@ -59,6 +59,36 @@ def test_parser_setup_with_claude_default():
     parser = build_parser()
     args = parser.parse_args(["setup"])
     assert args.with_claude is False
+
+
+def test_parser_setup_tunnel_default():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "-q"])
+    assert args.tunnel == "tailscale"
+
+
+def test_parser_setup_tunnel_none():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "-q", "--tunnel", "none"])
+    assert args.tunnel == "none"
+
+
+def test_parser_setup_tunnel_cloudflare():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "-q", "--tunnel", "cloudflare"])
+    assert args.tunnel == "cloudflare"
+
+
+def test_parser_enable_tunnel():
+    parser = build_parser()
+    args = parser.parse_args(["enable", "--tunnel", "none"])
+    assert args.tunnel == "none"
+
+
+def test_parser_disable_tunnel():
+    parser = build_parser()
+    args = parser.parse_args(["disable", "--tunnel", "cloudflare"])
+    assert args.tunnel == "cloudflare"
 
 
 def test_parser_status():
@@ -274,6 +304,25 @@ def test_install_claude_handlers(tmp_path):
     # Check executable
     for f in handlers_dir.glob("*.sh"):
         assert f.stat().st_mode & 0o755
+
+
+def test_safe_remove_file(tmp_path):
+    """_safe_remove deletes a file even without rip installed."""
+    f = tmp_path / "test.txt"
+    f.write_text("hello")
+    with patch("shutil.which", return_value=None):
+        assert _safe_remove(f) is True
+    assert not f.exists()
+
+
+def test_safe_remove_directory(tmp_path):
+    """_safe_remove deletes a directory even without rip installed."""
+    d = tmp_path / "subdir"
+    d.mkdir()
+    (d / "file.txt").write_text("hello")
+    with patch("shutil.which", return_value=None):
+        assert _safe_remove(d) is True
+    assert not d.exists()
 
 
 def test_install_claude_handlers_no_overwrite(tmp_path):

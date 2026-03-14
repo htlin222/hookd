@@ -1,11 +1,11 @@
 [Unit]
 Description=hookd - GitHub webhook listener
-After=network.target tailscaled.service
+After=network.target{% if tunnel | default('tailscale') == 'tailscale' %} tailscaled.service{% endif %}
 
 [Service]
 Type=simple
 WorkingDirectory={{ workdir }}
-EnvironmentFile={{ workdir }}/.hookd/.env
+EnvironmentFile=-{{ workdir }}/.hookd/.env
 ExecStart={{ python_path }} -m hookd.listener --config {{ workdir }}/.hookd/config.yaml --port {{ port }}
 Restart=on-failure
 RestartSec=5

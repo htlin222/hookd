@@ -43,8 +43,12 @@ def main():
 
     port = args.port or int(os.environ.get("HOOKD_PORT", str(DEFAULT_PORT)))
 
-    with open(config_path) as f:
-        config = yaml.safe_load(f) or {}
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+    except yaml.YAMLError as exc:
+        logger.error("Invalid YAML in config file %s: %s", config_path, exc)
+        sys.exit(1)
 
     workdir = config_path.parent.parent  # .hookd/../
     server = create_server(config, secret, port, workdir)

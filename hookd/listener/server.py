@@ -54,7 +54,10 @@ class EventLog:
         for line in lines[-n:]:
             line = line.strip()
             if line:
-                entries.append(json.loads(line))
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    logger.warning("Skipping malformed event log line: %s", line[:100])
         return entries
 
 
@@ -70,7 +73,15 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._respond(404, {"error": "Not found"})
             return
 
-        content_length = int(self.headers.get("Content-Length", 0))
+        MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            self._respond(400, {"error": "Invalid Content-Length"})
+            return
+        if content_length > MAX_BODY_SIZE:
+            self._respond(413, {"error": "Payload too large"})
+            return
         body = self.rfile.read(content_length)
 
         signature = self.headers.get(SIGNATURE_HEADER, "")
