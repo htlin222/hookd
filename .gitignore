@@ -11,4 +11,4 @@ wheels/
 
 # hookd runtime
 .hookd/
-handlers/
+/handlers/

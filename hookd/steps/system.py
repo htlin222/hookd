@@ -19,11 +19,13 @@ def generate_env_file(
     github_token: str,
     port: int,
     repo: str = "",
+    tunnel: str = "tailscale",
 ) -> None:
     lines = [
         f"HOOKD_SECRET={secret}",
         f"HOOKD_GITHUB_TOKEN={github_token}",
         f"HOOKD_PORT={port}",
+        f"HOOKD_TUNNEL={tunnel}",
     ]
     if repo:
         lines.append(f"HOOKD_REPO={repo}")
@@ -35,27 +37,31 @@ def generate_service_file(
     workdir: str,
     port: int,
     python_path: str | None = None,
+    tunnel: str = "tailscale",
 ) -> str:
     if python_path is None:
         python_path = shutil.which("python3") or "python3"
 
     if manager == "systemd":
-        return _generate_systemd(workdir, port, python_path)
+        return _generate_systemd(workdir, port, python_path, tunnel=tunnel)
     elif manager == "launchd":
         return _generate_launchd(workdir, port, python_path)
     else:
         raise ValueError(f"Unknown service manager: {manager}")
 
 
-def _generate_systemd(workdir: str, port: int, python_path: str) -> str:
+def _generate_systemd(workdir: str, port: int, python_path: str, tunnel: str = "tailscale") -> str:
+    after = "network.target"
+    if tunnel == "tailscale":
+        after += " tailscaled.service"
     return f"""[Unit]
 Description=hookd - GitHub webhook listener
-After=network.target tailscaled.service
+After={after}
 
 [Service]
 Type=simple
 WorkingDirectory={workdir}
-EnvironmentFile={workdir}/.hookd/.env
+EnvironmentFile=-{workdir}/.hookd/.env
 ExecStart={python_path} -m hookd.listener --config {workdir}/.hookd/config.yaml --port {port}
 Restart=on-failure
 RestartSec=5

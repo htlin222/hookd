@@ -99,6 +99,16 @@ class DeployScreen(Screen):
             log.write(f"  [red]\u2717 Error: {exc}[/red]")
             return
 
+        # Step 3b: Copy global handler templates
+        try:
+            from hookd.global_config import copy_global_templates
+
+            copied = copy_global_templates(hookd_dir / "handlers")
+            if copied:
+                log.write(f"  [green]\u2713[/green] Copied {len(copied)} global template(s): {', '.join(copied)}")
+        except Exception as exc:
+            log.write(f"  [yellow]! Could not copy global templates: {exc}[/yellow]")
+
         # Step 4: Write .env file
         log.write("[bold]Step 4:[/bold] Writing .env file...")
         try:

@@ -62,3 +62,18 @@ def test_event_log_reads(tmp_path):
     # Read from non-existent file
     other_log = EventLog(tmp_path / "nope.jsonl")
     assert other_log.read() == []
+
+
+def test_event_log_read_skips_malformed_lines(tmp_path):
+    """EventLog.read() skips corrupted JSON lines instead of crashing."""
+    log_path = tmp_path / "events.jsonl"
+    log_path.write_text(
+        '{"event": "push", "sender": "user1"}\n'
+        'THIS IS NOT JSON\n'
+        '{"event": "push", "sender": "user2"}\n'
+    )
+    event_log = EventLog(log_path)
+    entries = event_log.read(n=10)
+    assert len(entries) == 2
+    assert entries[0]["sender"] == "user1"
+    assert entries[1]["sender"] == "user2"

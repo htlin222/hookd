@@ -1,6 +1,6 @@
 from textual.screen import Screen
 from textual.containers import Vertical
-from textual.widgets import Static, Button, Input
+from textual.widgets import Static, Button, Input, Checkbox
 
 
 class GitHubScreen(Screen):
@@ -10,13 +10,32 @@ class GitHubScreen(Screen):
     """
 
     def compose(self):
+        from hookd.global_config import get_global_token
+
+        self._global_token = get_global_token()
+
         with Vertical(id="main"):
             yield Static("GitHub Authentication", classes="title")
             yield Static("")
             yield Static("Enter your GitHub Personal Access Token (PAT).")
             yield Static("Required scopes: repo, admin:repo_hook", classes="subtitle")
             yield Static("")
-            yield Input(placeholder="ghp_...", id="token_input", password=True)
+
+            if self._global_token:
+                masked = self._global_token[:4] + "..." + self._global_token[-4:]
+                yield Static(
+                    f"[green]Found saved token:[/green] {masked}",
+                    id="global_token_hint",
+                )
+
+            yield Input(
+                placeholder="ghp_...",
+                id="token_input",
+                password=True,
+                value=self._global_token or "",
+            )
+            yield Static("")
+            yield Checkbox("Save token globally for future repos", id="save_global", value=True)
             yield Static("")
             yield Static("", id="status")
             yield Button("Validate Token", id="validate", variant="primary")
@@ -26,6 +45,13 @@ class GitHubScreen(Screen):
         if event.button.id == "validate":
             self._validate_token()
         elif event.button.id == "continue":
+            # Save globally if checked
+            save_cb = self.query_one("#save_global", Checkbox)
+            if save_cb.value and self.app.context.get("github_token"):
+                from hookd.global_config import save_global_token
+
+                save_global_token(self.app.context["github_token"])
+
             from hookd.tui.screens.events import EventsScreen
 
             self.app.push_screen(EventsScreen())
